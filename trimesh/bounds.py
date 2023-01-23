@@ -19,6 +19,172 @@ except BaseException as E:
     spatial = exceptions.ExceptionModule(E)
     optimize = exceptions.ExceptionModule(E)
 
+def sphere(obj, max_recursion_depth=1000):
+    """
+    Find the bounding sphere for a Trimesh using Welzl's algorithm
+
+    Parameters
+    ----------
+    obj : trimesh.Trimesh, (n, 2) float, or (n, 3) float
+       Mesh object or points in 2D or 3D space
+    angle_digits : int
+       How much angular precision do we want on our result.
+       Even with less precision the returned extents will cover
+       the mesh albeit with larger than minimal volume, and may
+       experience substantial speedups.
+    ordered : bool
+      Return a consistent order for bounds
+    normal : None or (3,) float
+      Override search for normal on 3D meshes
+
+    Returns
+    ----------
+    M : (3,) float
+        centre of the bounding sphere
+    r: float
+        The radius of the bounding sphere
+    exact_flag: bool
+        The function uses the recursive algorithm by Welzl to calculate the bounding sphere of a point cloud.
+        For big meshes with convex curved shapes, Python maximum's recursion depth can be exceeded.
+        If that happens, the functions only returns an approximate solution and the exact_flag is false.
+    """
+
+    # extract a set of convex hull vertices from the input
+    # we bother to do this to avoid recomputing the full convex hull if
+    # possible
+    if hasattr(obj, 'convex_hull'):
+        # if we have been passed a mesh, use its existing convex hull to pull from
+        # cache rather than recomputing. This version of the cached convex hull has
+        # normals pointing in arbitrary directions (straight from qhull)
+        # using this avoids having to compute the expensive corrected normals
+        # that mesh.convex_hull uses since normal directions don't matter here
+        vertices = obj.convex_hull.vertices
+        hull_normals = obj.convex_hull.face_normals
+    elif util.is_sequence(obj):
+        # we've been passed a list of points
+        points = np.asanyarray(obj)
+        if util.is_shape(points, (-1, 2)):
+            return oriented_bounds_2D(points)
+        elif util.is_shape(points, (-1, 3)):
+            hull_obj = spatial.ConvexHull(points)
+            vertices = hull_obj.points[hull_obj.vertices]
+            hull_normals, valid = triangles.normals(
+                hull_obj.points[hull_obj.simplices])
+        else:
+            raise ValueError('Points are not (n,3) or (n,2)!')
+    else:
+        raise ValueError(
+            'Oriented bounds must be passed a mesh or a set of points!')
+
+    N_max = max_recursion_depth - 13
+    points = mesh.vertices
+    point_cloud = trimesh.points.PointCloud(points)
+    hull = point_cloud.convex_hull
+    points_convex = hull.vertices
+
+    if np.shape(points_convex)[0] > N_max:
+        points_convex,_ = trimesh.sample.sample_surface(hull, N_max)
+        exact_flag = False
+    else:
+        exact_flag = True
+
+    def intersection_perpendicular_bisector(A,B,C):
+        """
+        Find intersection of the perpendicular bisectors of a triangle
+
+        Parameters
+        ----------
+        A: (3,) float
+            triangle edge 1
+        B: (3,)
+            triangle edge 1
+        B: (3,)
+            triangle edge 1
+
+        Returns
+        ----------
+        intersection: (3,) float
+            intersection of the perpendicular bisectors of a triangle
+        facet_normal: (3,) float
+            facet_normal of the inputed triangle
+        """
+        M1 = (A+B)/2
+        M2 = (A+C)/2
+        facet_normal = np.cross(B-A,C-A)
+        v1 = np.cross(B-A,facet_normal)
+        v2 = np.cross(C-A,facet_normal)
+        A = np.transpose(np.concatenate(([v1],[-v2]),axis=0))
+        alpha,_,_,_ = np.linalg.lstsq(A,M2-M1,rcond=None)
+        intersection = M1 + alpha[0]*v1
+        return intersection, facet_normal
+
+
+    def welzl(P,R):
+        """
+        Welzl's algorithm
+
+        Parameters
+        ----------
+        P: (n,3) float
+            triangle edge 1
+        R: (m,3) float
+            triangle edge 1
+
+        Returns
+        ----------
+        M : (3,) float
+            centre of the bounding sphere
+        r: float
+            The radius of the bounding sphere
+        """
+        if P.size == 0:
+            if np.shape(R)[0] == 0:
+                M = np.ones((3,))*0.5
+                r = 0
+                return M,r
+
+            elif np.shape(R)[0] == 1:
+                M = R[0,:]
+                r = 0         
+                return M,r
+
+            elif np.shape(R)[0] == 2:
+                M = (R[0,:] + R[1,:])/2
+                r = np.linalg.norm(M-R[0,:])
+                return M,r
+
+            else: # np.shape(R)[0] == 3
+                M,_ = intersection_perpendicular_bisector(R[0,:],R[1,:],R[2,:])
+                r = np.linalg.norm(M-R[0,:])
+                return M,r
+            
+        elif np.shape(R)[0] == 4:
+            M1,v1 = intersection_perpendicular_bisector(R[0,:],R[1,:],R[2,:])
+            M2,v2 = intersection_perpendicular_bisector(R[0,:],R[1,:],R[3,:])
+            A = np.transpose(np.concatenate(([v1],[-v2]),axis=0))
+            alpha,_,_,_ = np.linalg.lstsq(A,M2-M1,rcond=None)
+            M = M1 + alpha[0]*v1
+            r = np.linalg.norm(M-R[0,:])
+            return M,r
+
+        else:
+            #p = P[np.random.randint(0,np.shape(P)[0]-1),:]
+            p = P[[0],:]
+            P = P[1:,:]
+            M,r = welzl(P,R)
+            if np.linalg.norm(M-p) >= r:
+                # p is boundary
+                R = np.concatenate((R,p),axis=0)
+                M,r = welzl(P,R)
+            return M,r 
+                    
+    rng = np.random.default_rng()            
+    P = rng.permutation(points_convex,axis=0)
+    R = np.zeros((0,3))
+
+    M,r = welzl(P,R)
+
+    return M,r,exact_flag
 
 def oriented_bounds_2D(points, qhull_options='QbB'):
     """
@@ -36,7 +202,7 @@ def oriented_bounds_2D(points, qhull_options='QbB'):
       input points so that the axis aligned bounding box
       is CENTERED AT THE ORIGIN.
     rectangle : (2,) float
-       Size of extents once input points are transformed
+       Size of extents once input points are transforme
        by transform
     """
     # make sure input is a numpy array
@@ -479,3 +645,14 @@ def contains(bounds, points):
         (points < bounds[1]).all(axis=1))
 
     return points_inside
+
+if __name__ == "__main__":
+    with open("D:\egg.stl",'rb') as file:
+    mesh = trimesh.exchange.load.load(file,'stl')
+    start = time.time()
+    M,r,exact_flag = sphere(mesh)
+    exec_time = time.time()-start
+    print(exec_time)
+    print(M)
+    print(r)
+    print(exact_flag)
