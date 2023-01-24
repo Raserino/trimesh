@@ -8,6 +8,7 @@ from . import geometry
 from . import grouping
 from . import triangles
 from . import transformations
+from . import sample
 
 try:
     # scipy is a soft dependency
@@ -19,74 +20,32 @@ except BaseException as E:
     spatial = exceptions.ExceptionModule(E)
     optimize = exceptions.ExceptionModule(E)
 
-def sphere(obj, max_recursion_depth=1000):
+
+def circlesphere(obj, max_recursion_depth=1000):
     """
-    Find the bounding sphere for a Trimesh using Welzl's algorithm
+    Find the minimum enclosing circle or sphere for a mesh (3D) or a
+    simple array containting 2D or 3D points using Welzl's algorithm. 
 
     Parameters
     ----------
     obj : trimesh.Trimesh, (n, 2) float, or (n, 3) float
-       Mesh object or points in 2D or 3D space
-    angle_digits : int
-       How much angular precision do we want on our result.
-       Even with less precision the returned extents will cover
-       the mesh albeit with larger than minimal volume, and may
-       experience substantial speedups.
-    ordered : bool
-      Return a consistent order for bounds
-    normal : None or (3,) float
-      Override search for normal on 3D meshes
+        Mesh object or points in 2D or 3D space
+    max_recursion_depth : None or int
+        If no exact solution can be calculated, increasing the maximum recursion depth can help.
+        This however comes at the risk of segfaults, so it should be handled with care!
 
     Returns
     ----------
-    M : (3,) float
+    M : (2,) or (3,) float
         centre of the bounding sphere
     r: float
         The radius of the bounding sphere
     exact_flag: bool
-        The function uses the recursive algorithm by Welzl to calculate the bounding sphere of a point cloud.
-        For big meshes with convex curved shapes, Python maximum's recursion depth can be exceeded.
-        If that happens, the functions only returns an approximate solution and the exact_flag is false.
+        The function uses the recursive algorithm by Welzl to calculate the bounding 
+        sphere of a point cloud. For big meshes with convex curved shapes, Python 
+        maximum's recursion depth can be exceeded. If that happens, the functions 
+        only returns an approximate solution and the exact_flag is false.
     """
-
-    # extract a set of convex hull vertices from the input
-    # we bother to do this to avoid recomputing the full convex hull if
-    # possible
-    if hasattr(obj, 'convex_hull'):
-        # if we have been passed a mesh, use its existing convex hull to pull from
-        # cache rather than recomputing. This version of the cached convex hull has
-        # normals pointing in arbitrary directions (straight from qhull)
-        # using this avoids having to compute the expensive corrected normals
-        # that mesh.convex_hull uses since normal directions don't matter here
-        vertices = obj.convex_hull.vertices
-        hull_normals = obj.convex_hull.face_normals
-    elif util.is_sequence(obj):
-        # we've been passed a list of points
-        points = np.asanyarray(obj)
-        if util.is_shape(points, (-1, 2)):
-            return oriented_bounds_2D(points)
-        elif util.is_shape(points, (-1, 3)):
-            hull_obj = spatial.ConvexHull(points)
-            vertices = hull_obj.points[hull_obj.vertices]
-            hull_normals, valid = triangles.normals(
-                hull_obj.points[hull_obj.simplices])
-        else:
-            raise ValueError('Points are not (n,3) or (n,2)!')
-    else:
-        raise ValueError(
-            'Oriented bounds must be passed a mesh or a set of points!')
-
-    N_max = max_recursion_depth - 13
-    points = mesh.vertices
-    point_cloud = trimesh.points.PointCloud(points)
-    hull = point_cloud.convex_hull
-    points_convex = hull.vertices
-
-    if np.shape(points_convex)[0] > N_max:
-        points_convex,_ = trimesh.sample.sample_surface(hull, N_max)
-        exact_flag = False
-    else:
-        exact_flag = True
 
     def intersection_perpendicular_bisector(A,B,C):
         """
@@ -97,9 +56,9 @@ def sphere(obj, max_recursion_depth=1000):
         A: (3,) float
             triangle edge 1
         B: (3,)
-            triangle edge 1
-        B: (3,)
-            triangle edge 1
+            triangle edge 2
+        C: (3,)
+            triangle edge 3
 
         Returns
         ----------
@@ -108,34 +67,39 @@ def sphere(obj, max_recursion_depth=1000):
         facet_normal: (3,) float
             facet_normal of the inputed triangle
         """
+        
+        # All perpendicular bisectors of the edges intersect in the same point
+        # so it is enough to calculate the intersection of two perendicular bisectors
+        # first bisection of two triangle edges
         M1 = (A+B)/2
         M2 = (A+C)/2
         facet_normal = np.cross(B-A,C-A)
+        # vectors perpendicular to the edges
         v1 = np.cross(B-A,facet_normal)
         v2 = np.cross(C-A,facet_normal)
+        # solve equation system to find intersection
         A = np.transpose(np.concatenate(([v1],[-v2]),axis=0))
         alpha,_,_,_ = np.linalg.lstsq(A,M2-M1,rcond=None)
         intersection = M1 + alpha[0]*v1
         return intersection, facet_normal
 
-
     def welzl(P,R):
         """
-        Welzl's algorithm
+        Recursive function to perform Welzl's algorithm
 
         Parameters
         ----------
-        P: (n,3) float
-            triangle edge 1
-        R: (m,3) float
-            triangle edge 1
+        P: (n,2) or (n,3) float
+            
+        R: (n,2) or (m,3) float
+            points on the boundary of the minimum enclosing circle/sphere
 
         Returns
         ----------
-        M : (3,) float
-            centre of the bounding sphere
+        M : (2,) or (3,) float
+            centre of the minimum enclosing circle/sphere
         r: float
-            The radius of the bounding sphere
+            The radius of the minimum enclosing circle/sphere
         """
         if P.size == 0:
             if np.shape(R)[0] == 0:
@@ -177,13 +141,55 @@ def sphere(obj, max_recursion_depth=1000):
                 R = np.concatenate((R,p),axis=0)
                 M,r = welzl(P,R)
             return M,r 
-                    
+
+    # extract a set of convex hull vertices from the input
+    # we bother to do this to avoid recomputing the full convex hull if
+    # possible
+    if hasattr(obj, 'convex_hull'):
+        # if we have been passed a mesh, use its existing convex hull to pull from
+        # cache rather than recomputing. This version of the cached convex hull has
+        # normals pointing in arbitrary directions (straight from qhull)
+        # using this avoids having to compute the expensive corrected normals
+        # that mesh.convex_hull uses since normal directions don't matter here
+        hull_mesh = obj.convex_hull
+        vertices = hull_mesh.vertices
+    elif util.is_sequence(obj):
+        # we've been passed a list of points
+        points = np.asanyarray(obj)
+        if util.is_shape(vertices, (-1, 2)): # 2D
+            # make points 3D by adding third zero coordinate
+            points = np.insert(points,2,0,axis=1)
+            flag_2D = True
+        elif util.is_shape(points, (-1, 3)): # 3D
+            flag_2D = False
+        else:
+            raise ValueError('Points are not (n,3) or (n,2)!')
+        # calculate convex hull
+        hull_mesh = convex.convex_hull(points)
+        vertices = hull_mesh.vertices
+    else:
+        raise ValueError(
+            'Oriented bounds must be passed a mesh or a set of points!')
+
+    # prevent max recursion error (-13 was found by try and error)
+    N_max = max_recursion_depth - 13
+    if np.shape(vertices)[0] > N_max:
+        # Now Welzl's algorithm will be performed on N_max points that are sampled
+        # on the convex hulls surface. This will give an approximate result for 
+        # the minimum enclosing circle/sphere.
+        vertices,_ = sample.sample_surface(hull_mesh, N_max)
+        exact_flag = False
+    else:
+        exact_flag = True
+
+    # permute vertices randomly     
     rng = np.random.default_rng()            
-    P = rng.permutation(points_convex,axis=0)
+    P = rng.permutation(vertices,axis=0)
     R = np.zeros((0,3))
-
+    # call Welzl's algorithm
     M,r = welzl(P,R)
-
+    if flag_2D:
+        M =  M[:1]
     return M,r,exact_flag
 
 def oriented_bounds_2D(points, qhull_options='QbB'):
