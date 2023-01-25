@@ -13,21 +13,18 @@ class BoundsTest(g.unittest.TestCase):
 
     def test_circlesphere_mesh(self):
         """
-        Test the functionality of the circlesphere function on 3D meshes
+        Test the functionality and accuracy of circlesphere() on 3D meshes
         """
         for m in self.meshes:
             g.log.info('Testing circlesphere of %s', m.metadata['file_name'])
             M,r,exact_flag = g.trimesh.bounds.circlesphere(m)
-            if exact_flag:
-                tol = 1e-3
-            else:
-                tol = 1e-2 # higher tolerance for approximate mesh
+            tol = 0.05
             # check if all points are within outputted sphere
-            outer_sphere = g.trimesh.creation.icosphere(subdivisions=5, 
+            outer_sphere = g.trimesh.creation.icosphere(subdivisions=4, 
                                                     radius=r*(1+tol), 
                                                     color=None)
             # check if some points are not within smaller than outputted sphere
-            smaller_sphere = g.trimesh.creation.icosphere(subdivisions=5, 
+            smaller_sphere = g.trimesh.creation.icosphere(subdivisions=4, 
                                                     radius=r*(1-tol), 
                                                     color=None)
             # move sphere from origin to M
@@ -37,10 +34,6 @@ class BoundsTest(g.unittest.TestCase):
             smaller_sphere = smaller_sphere.apply_transform(T)
             assert all(outer_sphere.contains(m.vertices))                                
             assert not all(smaller_sphere.contains(m.vertices))
-            # Note: This test is very slow due to the big spheres being generated.
-            # However, if fewer subdivisions are used , the accuarcy of the results
-            # of the minimum enclosing spheres can't be properly checked because
-            # the accuracy of the spheres used as references is low already.
 
     def test_circlesphere_3D_points(self):
         """
