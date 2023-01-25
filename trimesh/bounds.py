@@ -23,7 +23,7 @@ except BaseException as E:
 
 def circlesphere(obj, max_recursion_depth=1000):
     """
-    Find the minimum enclosing circle or sphere for a mesh (3D) or a
+    Find the minimum enclosing (bounding) circle or sphere for a mesh (3D) or a
     simple array containting 2D or 3D points using Welzl's algorithm. 
 
     Parameters
@@ -31,8 +31,12 @@ def circlesphere(obj, max_recursion_depth=1000):
     obj : trimesh.Trimesh, (n, 2) float, or (n, 3) float
         Mesh object or points in 2D or 3D space
     max_recursion_depth : None or int
-        If no exact solution can be calculated, increasing the maximum recursion depth can help.
-        This however comes at the risk of segfaults, so it should be handled with care!
+        The function uses the recursive algorithm by Welzl to calculate the bounding 
+        sphere of a point cloud. For big meshes with convex curved shapes, Python 
+        maximum's recursion depth can be exceeded. If no exact solution can be 
+        calculated, increasing the maximum recursion depth can help. Increasing this 
+        setting however comes at the risk of segfaults, so it should be handled 
+        with extreme care!
 
     Returns
     ----------
@@ -41,15 +45,13 @@ def circlesphere(obj, max_recursion_depth=1000):
     r: float
         The radius of the bounding sphere
     exact_flag: bool
-        The function uses the recursive algorithm by Welzl to calculate the bounding 
-        sphere of a point cloud. For big meshes with convex curved shapes, Python 
-        maximum's recursion depth can be exceeded. If that happens, the functions 
-        only returns an approximate solution and the exact_flag is false.
+        True if the solution is exact, False when the solution is approximate 
+        because of the maximum recursion depth
     """
 
     def intersection_perpendicular_bisector(A,B,C):
         """
-        Find intersection of the perpendicular bisectors of a triangle
+        Find intersection of the perpendicular bisectors of a triangle in 3D
 
         Parameters
         ----------
@@ -70,7 +72,6 @@ def circlesphere(obj, max_recursion_depth=1000):
         
         # All perpendicular bisectors of the edges intersect in the same point
         # so it is enough to calculate the intersection of two perendicular bisectors
-        # first bisection of two triangle edges
         M1 = (A+B)/2
         M2 = (A+C)/2
         facet_normal = np.cross(B-A,C-A)
@@ -89,42 +90,53 @@ def circlesphere(obj, max_recursion_depth=1000):
 
         Parameters
         ----------
-        P: (n,2) or (n,3) float
-            
-        R: (n,2) or (m,3) float
-            points on the boundary of the minimum enclosing circle/sphere
+        P: (n,3) float
+            Input list of points that could still be on the boundary
+        R: (m,3) float
+            Points on the boundary of the minimum enclosing circle/sphere
 
         Returns
         ----------
-        M : (2,) or (3,) float
-            centre of the minimum enclosing circle/sphere
+        M : (3,) float
+            Centre of the minimum enclosing circle/sphere
         r: float
             The radius of the minimum enclosing circle/sphere
         """
+        # abort recursion conditions
         if P.size == 0:
+            # zero placeholder
             if np.shape(R)[0] == 0:
-                M = np.ones((3,))*0.5
+                M = np.zeros((3,))
                 r = 0
                 return M,r
-
-            elif np.shape(R)[0] == 1:
+        	
+            # minimum enclosing sphere from a single boundary point
+            elif np.shape(R)[0] == 1: 
                 M = R[0,:]
                 r = 0         
                 return M,r
 
+            # minimum enclosing sphere from 2 boundary points
             elif np.shape(R)[0] == 2:
                 M = (R[0,:] + R[1,:])/2
                 r = np.linalg.norm(M-R[0,:])
                 return M,r
 
+            # minimum enclosing sphere from 3 boundary points
             else: # np.shape(R)[0] == 3
                 M,_ = intersection_perpendicular_bisector(R[0,:],R[1,:],R[2,:])
                 r = np.linalg.norm(M-R[0,:])
                 return M,r
-            
+        
+        # minimum enclosing sphere from 4 boundary points
         elif np.shape(R)[0] == 4:
+            # The middle of the circle is the intersection of the perpendiculars
+            # through the perpendicular bisector intersections of the 4 triangles
+            # that are formed by the 4 points. It is enough to use 2 triangles
+            # because all perpendiculars will intersect in one point.
             M1,v1 = intersection_perpendicular_bisector(R[0,:],R[1,:],R[2,:])
             M2,v2 = intersection_perpendicular_bisector(R[0,:],R[1,:],R[3,:])
+            # solve equation system to find intersection
             A = np.transpose(np.concatenate(([v1],[-v2]),axis=0))
             alpha,_,_,_ = np.linalg.lstsq(A,M2-M1,rcond=None)
             M = M1 + alpha[0]*v1
@@ -132,12 +144,13 @@ def circlesphere(obj, max_recursion_depth=1000):
             return M,r
 
         else:
-            #p = P[np.random.randint(0,np.shape(P)[0]-1),:]
+            # select one point
             p = P[[0],:]
+            # remove selected point from P
             P = P[1:,:]
             M,r = welzl(P,R)
-            if np.linalg.norm(M-p) >= r:
-                # p is boundary
+            if np.linalg.norm(M-p) >= r: # if p is not inside of returned circle
+                # p is boundary, add it to R
                 R = np.concatenate((R,p),axis=0)
                 M,r = welzl(P,R)
             return M,r 
@@ -176,12 +189,12 @@ def circlesphere(obj, max_recursion_depth=1000):
         raise ValueError(
             'Oriented bounds must be passed a mesh or a set of points!')
 
-    # prevent max recursion error(-50 for to be safe)
+    # prevent max recursion error (-50 to be safe, accuracy doesn't change much)
     N_max = max_recursion_depth - 50
     if np.shape(vertices)[0] > N_max:
         # Now Welzl's algorithm will be performed on N_max points that are sampled
-        # on the convex hulls surface. This will give an approximate result for 
-        # the minimum enclosing circle/sphere.
+        # on the convex hulls surface. This will only give an approximate result 
+        # for the minimum enclosing circle/sphere. 
         vertices,_ = sample.sample_surface(hull_mesh, N_max)
         exact_flag = False
     else:
@@ -196,6 +209,7 @@ def circlesphere(obj, max_recursion_depth=1000):
     if flag_2D:
         M =  M[:2]
     return M,r,exact_flag
+
 
 def oriented_bounds_2D(points, qhull_options='QbB'):
     """
@@ -213,7 +227,7 @@ def oriented_bounds_2D(points, qhull_options='QbB'):
       input points so that the axis aligned bounding box
       is CENTERED AT THE ORIGIN.
     rectangle : (2,) float
-       Size of extents once input points are transforme
+       Size of extents once input points are transformed
        by transform
     """
     # make sure input is a numpy array

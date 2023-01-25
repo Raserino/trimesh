@@ -21,7 +21,7 @@ class BoundsTest(g.unittest.TestCase):
             if exact_flag:
                 tol = 1e-3
             else:
-                tol = 1e-2
+                tol = 1e-2 # higher tolerance for approximate mesh
             # check if all points are within outputted sphere
             outer_sphere = g.trimesh.creation.icosphere(subdivisions=5, 
                                                     radius=r*(1+tol), 
@@ -37,18 +37,23 @@ class BoundsTest(g.unittest.TestCase):
             smaller_sphere = smaller_sphere.apply_transform(T)
             assert all(outer_sphere.contains(m.vertices))                                
             assert not all(smaller_sphere.contains(m.vertices))
+            # Note: This test is very slow due to the big spheres being generated.
+            # However, if fewer subdivisions are used , the accuarcy of the results
+            # of the minimum enclosing spheres can't be properly checked because
+            # the accuracy of the spheres used as references is low already.
 
     def test_circlesphere_3D_points(self):
         """
-        Test the circlesphere functionality on an input with 3D points
+        Test the circlesphere functionality on an input with 3D points as array
         """
         # We will test on points of a huge sphere, so we can also test the
         # functionality of giving approximate results for big convex meshes
         sphere = g.trimesh.creation.icosphere(subdivisions=4, radius=1.0, color=None)
         points = sphere.vertices
         M,r,exact_flag = g.trimesh.bounds.circlesphere(points)
-        assert g.np.allclose(M,[0,0,0],atol = 1e-2)
-        assert g.np.isclose(r, 1,atol = 1e-2)
+        # check if result is correct with 1% accuracy
+        assert g.np.allclose(M,[0,0,0],atol = 1e-3)
+        assert g.np.isclose(r, 1,atol = 1e-3)
         assert exact_flag == False
 
 
@@ -62,8 +67,10 @@ class BoundsTest(g.unittest.TestCase):
         points = g.np.concatenate((points,g.np.random.rand(100,2)),axis=0)
 
         M,r,exact_flag = g.trimesh.bounds.circlesphere(points)
+        # check if result is correct with 0.001% accuracy
         assert g.np.allclose(M,[0.5,0.5],atol = 1e-5)
         assert g.np.isclose(r, 0.7071067812, atol = 1e-5)
+        # result should be exact with only 104 input points
         assert exact_flag == True
 
 
