@@ -11,6 +11,62 @@ class BoundsTest(g.unittest.TestCase):
                                           'featuretype.STL']]
         self.meshes = g.np.append(meshes, list(g.get_meshes(5)))
 
+    def test_circlesphere_mesh(self):
+        """
+        Test the functionality of the circlesphere function on 3D meshes
+        """
+        for m in self.meshes:
+            g.log.info('Testing circlesphere of %s', m.metadata['file_name'])
+            M,r,exact_flag = g.trimesh.bounds.circlesphere(m)
+            if exact_flag:
+                tol = 1e-3
+            else:
+                tol = 1e-2
+            # check if all points are within outputted sphere
+            outer_sphere = g.trimesh.creation.icosphere(subdivisions=5, 
+                                                    radius=r*(1+tol), 
+                                                    color=None)
+            # check if some points are not within smaller than outputted sphere
+            smaller_sphere = g.trimesh.creation.icosphere(subdivisions=5, 
+                                                    radius=r*(1-tol), 
+                                                    color=None)
+            # move sphere from origin to M
+            T = g.np.eye(4)
+            T[:3,3] = M
+            outer_sphere = outer_sphere.apply_transform(T)
+            smaller_sphere = smaller_sphere.apply_transform(T)
+            assert all(outer_sphere.contains(m.vertices))                                
+            assert not all(smaller_sphere.contains(m.vertices))
+
+    def test_circlesphere_3D_points(self):
+        """
+        Test the circlesphere functionality on an input with 3D points
+        """
+        # We will test on points of a huge sphere, so we can also test the
+        # functionality of giving approximate results for big convex meshes
+        sphere = g.trimesh.creation.icosphere(subdivisions=4, radius=1.0, color=None)
+        points = sphere.vertices
+        M,r,exact_flag = g.trimesh.bounds.circlesphere(points)
+        assert g.np.allclose(M,[0,0,0],atol = 1e-2)
+        assert g.np.isclose(r, 1,atol = 1e-2)
+        assert exact_flag == False
+
+
+    def test_circlesphere_2D_points(self):
+        """
+        Test the circlesphere functionality on an input with 2D point
+        """
+        # edges of the square
+        points = g.np.array([[0,0],[0,1],[1,0],[1,1]]) 
+        # add random points in the square which should not change the result
+        points = g.np.concatenate((points,g.np.random.rand(100,2)),axis=0)
+
+        M,r,exact_flag = g.trimesh.bounds.circlesphere(points)
+        assert g.np.allclose(M,[0.5,0.5],atol = 1e-5)
+        assert g.np.isclose(r, 0.7071067812, atol = 1e-5)
+        assert exact_flag == True
+
+
     def test_obb_mesh(self):
         """
         Test the OBB functionality in attributes of Trimesh objects

@@ -153,10 +153,11 @@ def circlesphere(obj, max_recursion_depth=1000):
         # that mesh.convex_hull uses since normal directions don't matter here
         hull_mesh = obj.convex_hull
         vertices = hull_mesh.vertices
+        flag_2D = False # mesh is always 3D
     elif util.is_sequence(obj):
         # we've been passed a list of points
         points = np.asanyarray(obj)
-        if util.is_shape(vertices, (-1, 2)): # 2D
+        if util.is_shape(points, (-1, 2)): # 2D
             # make points 3D by adding third zero coordinate
             points = np.insert(points,2,0,axis=1)
             flag_2D = True
@@ -164,6 +165,10 @@ def circlesphere(obj, max_recursion_depth=1000):
             flag_2D = False
         else:
             raise ValueError('Points are not (n,3) or (n,2)!')
+        # if one dimension is all zero, add eps to prevent convex_hull error
+        for i in range(0,3):
+            if np.allclose(points[:,i],points[:,i]*0):
+                points[0,i] = np.finfo(float).eps
         # calculate convex hull
         hull_mesh = convex.convex_hull(points)
         vertices = hull_mesh.vertices
@@ -171,8 +176,8 @@ def circlesphere(obj, max_recursion_depth=1000):
         raise ValueError(
             'Oriented bounds must be passed a mesh or a set of points!')
 
-    # prevent max recursion error (-13 was found by try and error)
-    N_max = max_recursion_depth - 13
+    # prevent max recursion error(-50 for to be safe)
+    N_max = max_recursion_depth - 50
     if np.shape(vertices)[0] > N_max:
         # Now Welzl's algorithm will be performed on N_max points that are sampled
         # on the convex hulls surface. This will give an approximate result for 
@@ -181,7 +186,7 @@ def circlesphere(obj, max_recursion_depth=1000):
         exact_flag = False
     else:
         exact_flag = True
-
+    
     # permute vertices randomly     
     rng = np.random.default_rng()            
     P = rng.permutation(vertices,axis=0)
@@ -189,7 +194,7 @@ def circlesphere(obj, max_recursion_depth=1000):
     # call Welzl's algorithm
     M,r = welzl(P,R)
     if flag_2D:
-        M =  M[:1]
+        M =  M[:2]
     return M,r,exact_flag
 
 def oriented_bounds_2D(points, qhull_options='QbB'):
@@ -651,14 +656,3 @@ def contains(bounds, points):
         (points < bounds[1]).all(axis=1))
 
     return points_inside
-
-if __name__ == "__main__":
-    with open("D:\egg.stl",'rb') as file:
-    mesh = trimesh.exchange.load.load(file,'stl')
-    start = time.time()
-    M,r,exact_flag = sphere(mesh)
-    exec_time = time.time()-start
-    print(exec_time)
-    print(M)
-    print(r)
-    print(exact_flag)
